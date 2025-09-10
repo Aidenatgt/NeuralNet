@@ -3,6 +3,12 @@ name = "NeuralNet"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+cuda = ["custos-math/cuda"]
+
+[build-dependencies]
+cmake = "0.1.54"
+
 [dependencies]
 anyhow = "1.0.99"
 custos-math = { version = "0.6.3", features = ["cuda"] }
