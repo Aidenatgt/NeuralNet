@@ -6,10 +6,16 @@ version = 4
 name = "NeuralNet"
 version = "0.1.0"
 dependencies = [
- "custos 0.7.0",
+ "anyhow",
  "custos-math",
  "rayon",
 ]
+
+[[package]]
+name = "anyhow"
+version = "1.0.99"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
 name = "crossbeam-deque"
@@ -43,17 +49,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab4f07d2653db11866ef2258f7b852e364a7a549c554e7f3a0d23ec555aa6a37"
 dependencies = [
  "custos-macro",
- "min-cl 0.1.3",
-]
-
-[[package]]
-name = "custos"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f64a594a7f26ccb5a978075502bf2222b8c674bf6dc12e21ac07a3577ab28af3"
-dependencies = [
- "custos-macro",
- "min-cl 0.2.0",
+ "min-cl",
 ]
 
 [[package]]
@@ -73,7 +69,7 @@ version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36c29b722f88f0dfe7ef75a182e5bea4d3029a40ec72ba08addd58ee0e90c87e"
 dependencies = [
- "custos 0.6.3",
+ "custos",
 ]
 
 [[package]]
@@ -87,12 +83,6 @@ name = "min-cl"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4c6f4ab120528025d53f8a5067850903d325da81e497eceba75083f561798c3"
-
-[[package]]
-name = "min-cl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65395ee687b9bab73173c2b5d7bd70b65ec4bba11fdc695351e1a903ef5d2533"
 
 [[package]]
 name = "proc-macro2"

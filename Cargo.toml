@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-custos = { version = "0.7.0", features = ["cuda"] }
+anyhow = "1.0.99"
 custos-math = { version = "0.6.3", features = ["cuda"] }
 rayon = "1.11.0"
