@@ -15,7 +15,7 @@ fn main() {
 
     // Link the produced static lib
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=unary");
+    println!("cargo:rustc-link-lib=static=cuda_lib");
 
     // And CUDA runtime + libstdc++
     println!("cargo:rustc-link-search=native={}/lib64", cuda_home);
@@ -24,7 +24,7 @@ fn main() {
 
     // Rebuild triggers
     println!("cargo:rerun-if-changed=cuda-lib/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=cuda-lib/unary_wrapper.cu");
-    println!("cargo:rerun-if-changed=cuda-lib/unary.cuh");
-    println!("cargo:rerun-if-changed=cuda-lib/include/unary.h");
+    println!("cargo:rerun-if-changed=cuda-lib/cuda_lib_wrapper.cu");
+    println!("cargo:rerun-if-changed=cuda-lib/cuda_lib.cuh");
+    println!("cargo:rerun-if-changed=cuda-lib/include/cuda_lib.h");
 }

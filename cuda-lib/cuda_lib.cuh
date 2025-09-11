@@ -87,16 +87,31 @@ __device__ __forceinline__ float apply_op_grad(float x, int op, float p0) {
   }
 }
 
-__global__ void map_unary_inplace(float *in, float *out, size_t n, int op,
-                                  float p0) {
+__global__ void transpose_kernel(void *a, void *b, size_t r, size_t c) {
+  // TODO: Implement
+}
+__global__ void mmul_kernel(void *a_ptr, void *b_ptr, void *d_ptr, int r,
+                            int c) {
+  // TODO: Implement
+}
+__global__ void emul_kernel(void *a_ptr, void *b_ptr, void *d_ptr, int n) {
+  // TODO: Implement
+}
+__global__ void eadd_kernel(void *a_ptr, void *b_ptr, void *d_ptr, int n) {
+  // TODO: Implement
+}
+__global__ void esub_kernel(void *a_ptr, void *b_ptr, void *d_ptr, int n) {
+  // TODO: Implement
+}
+
+__global__ void unary_op_kernel(void *in, void *out, size_t n, int op) {
   size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   size_t stride = blockDim.x * gridDim.x;
   for (size_t i = tid; i < n; i += stride) {
     out[i] = apply_op(in[i], op, p0);
   }
 }
-__global__ void map_unary_grad_inplace(float *in, float *out, size_t n, int op,
-                                       float p0) {
+__global__ void unary_op_grad_kernel(void *in, void *out, size_t n, int op) {
   size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   size_t stride = blockDim.x * gridDim.x;
   for (size_t i = tid; i < n; i += stride) {
