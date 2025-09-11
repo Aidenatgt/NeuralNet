@@ -48,14 +48,14 @@ pub trait MatFamily {
     type Mat<const R: usize, const C: usize>: Matrix<R, C, Fam = Self>;
 }
 
-pub trait Matrix<const R: usize, const C: usize>: Sized + From<Vec<f32>> + Display {
+pub trait Matrix<const R: usize, const C: usize>: Sized + Display {
     type Fam: MatFamily;
 
+    fn from_slice(slice: &[f32]) -> anyhow::Result<Self>;
     fn zeros() -> Self;
     fn rows() -> usize;
     fn cols() -> usize;
-    fn t(&self) -> Self;
-    fn t_assign(&mut self);
+    fn t(&self) -> <Self::Fam as MatFamily>::Mat<C, R>;
     fn mmul<const N: usize>(
         &self,
         rhs: &<Self::Fam as MatFamily>::Mat<C, N>,
@@ -94,6 +94,16 @@ impl MatFamily for HostFam {
 
 impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
     type Fam = HostFam;
+
+    fn from_slice(value: &[f32]) -> anyhow::Result<Self> {
+        if value.len() != R * C {
+            Err(anyhow::Error::msg("Supplied slice was of incorrect length"))
+        } else {
+            Ok(Self {
+                data: Vec::from(value),
+            })
+        }
+    }
 
     fn zeros() -> Self {
         Self {
@@ -136,46 +146,126 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
     }
 
     fn emul_assign(&mut self, rhs: Self) {
-        todo!()
+        for i in 0..self.data.len() {
+            self.data[i] = self.data[i] * rhs.data[i]
+        }
     }
 
     fn add(&self, rhs: Self) -> Self {
-        todo!()
+        let result_data: Vec<f32> = self.data.iter().zip(rhs.data).map(|(a, b)| a + b).collect();
+        Self::from(result_data)
     }
 
     fn add_assign(&mut self, rhs: Self) {
-        todo!()
+        for i in 0..self.data.len() {
+            self.data[i] = self.data[i] + rhs.data[i]
+        }
     }
 
     fn sub(&self, rhs: Self) -> Self {
-        todo!()
+        let result_data: Vec<f32> = self.data.iter().zip(rhs.data).map(|(a, b)| a - b).collect();
+        Self::from(result_data)
     }
 
     fn sub_assign(&mut self, rhs: Self) {
-        todo!()
+        for i in 0..self.data.len() {
+            self.data[i] = self.data[i] - rhs.data[i]
+        }
     }
 
     fn unary_op(&self, op: UnaryOp) -> Self {
-        todo!()
+        let unary = match op {
+            UnaryOp::Relu => |x: &f32| if *x < 0.0 { 0.0 } else { *x },
+            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.01 * *x } else { *x },
+            UnaryOp::Silu => |x: &f32| {
+                // *x * sigmoid(*x)
+                let e = (-*x).exp();
+                *x / (1.0 + e)
+            },
+            UnaryOp::Gelu => |x: &f32| {
+                // Appro*ximate GELU: 0.5**x*(1+tanh(√(2/π)*(*x+0.044715*x³)))
+                let u = 0.7978845608 * (*x + 0.044715 * *x * *x * *x);
+                0.5 * *x * (1.0 + u.tanh())
+            },
+            UnaryOp::Tanh => |x: &f32| (*x).tanh(),
+            UnaryOp::Sigmoid => |x: &f32| {
+                if *x >= 0.0 {
+                    1.0 / (1.0 + (-*x).exp())
+                } else {
+                    let e = (*x).exp();
+                    e / (1.0 + e)
+                }
+            },
+            UnaryOp::Softplus => |x: &f32| {
+                // ln(1+e^*x) with overflow protection
+                if *x > 20.0 {
+                    *x // large positive: log(1+e^*x) ≈ *x
+                } else if *x < -20.0 {
+                    (-*x).exp() // very negative: log(1+tiny) ≈ tiny
+                } else {
+                    (1.0 + (*x).exp()).ln()
+                }
+            },
+        };
+
+        Self::from_slice(&self.data.iter().map(unary).collect::<Vec<f32>>()).unwrap()
     }
 
     fn unary_op_assign(&mut self, op: UnaryOp) {
-        todo!()
+        let unary = match op {
+            UnaryOp::Relu => |x: &f32| if *x < 0.0 { 0.0 } else { *x },
+            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.01 * *x } else { *x },
+            UnaryOp::Silu => |x: &f32| {
+                // *x * sigmoid(*x)
+                let e = (-*x).exp();
+                *x / (1.0 + e)
+            },
+            UnaryOp::Gelu => |x: &f32| {
+                // Appro*ximate GELU: 0.5**x*(1+tanh(√(2/π)*(*x+0.044715*x³)))
+                let u = 0.7978845608 * (*x + 0.044715 * *x * *x * *x);
+                0.5 * *x * (1.0 + u.tanh())
+            },
+            UnaryOp::Tanh => |x: &f32| (*x).tanh(),
+            UnaryOp::Sigmoid => |x: &f32| {
+                if *x >= 0.0 {
+                    1.0 / (1.0 + (-*x).exp())
+                } else {
+                    let e = (*x).exp();
+                    e / (1.0 + e)
+                }
+            },
+            UnaryOp::Softplus => |x: &f32| {
+                // ln(1+e^*x) with overflow protection
+                if *x > 20.0 {
+                    *x // large positive: log(1+e^*x) ≈ *x
+                } else if *x < -20.0 {
+                    (-*x).exp() // very negative: log(1+tiny) ≈ tiny
+                } else {
+                    (1.0 + (*x).exp()).ln()
+                }
+            },
+        };
+
+        self.data = self.data.iter().map(unary).collect::<Vec<f32>>()
     }
 
-    fn t(&self) -> Self {
-        todo!()
-    }
+    fn t(&self) -> HostMatrix<C, R> {
+        let mut result: HostMatrix<C, R> = HostMatrix::zeros();
 
-    fn t_assign(&mut self) {
-        todo!()
+        for r in 0..R {
+            for c in 0..C {
+                result.set(*self.get(r, c).unwrap(), c, r)
+            }
+        }
+
+        result
     }
 }
 
-impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for HostMatrix<R, C> {
+impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for anyhow::Result<HostMatrix<R, C>> {
     fn from(value: CudaMatrix<R, C>) -> Self {
-        let mut data = vec![0.0f32; Self::rows() * Self::cols()];
-        let bytes = Self::rows() * Self::cols() * std::mem::size_of::<f32>();
+        let mut data = vec![0.0f32; R * C];
+        let bytes = R * C * std::mem::size_of::<f32>();
         unsafe {
             let err = cudaMemcpy(
                 data.as_mut_ptr() as *mut _,
@@ -187,7 +277,7 @@ impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for HostMatrix<R, C>
                 panic!("cudaMemcpy D2H failed with error code {}", err);
             }
         }
-        Self { data }
+        Ok(HostMatrix::<R, C> { data })
     }
 }
 
@@ -198,7 +288,7 @@ impl<const R: usize, const C: usize> From<Vec<f32>> for HostMatrix<R, C> {
 }
 
 fn right_pad(string: &String, length: usize, pad_char: char) -> String {
-    if string.len() <= length {
+    if string.len() >= length {
         string.clone()
     } else {
         let mut result: String = String::with_capacity(length);
@@ -258,6 +348,9 @@ impl MatFamily for CudaFam {
 impl<const R: usize, const C: usize> Matrix<R, C> for CudaMatrix<R, C> {
     type Fam = CudaFam;
 
+    fn from_slice(slice: &[f32]) -> anyhow::Result<Self> {
+        Ok(Self::from(HostMatrix::<R, C>::from_slice(slice)?))
+    }
     fn zeros() -> Self {
         todo!()
     }
@@ -309,11 +402,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> for CudaMatrix<R, C> {
         todo!()
     }
 
-    fn t(&self) -> Self {
-        todo!()
-    }
-
-    fn t_assign(&mut self) {
+    fn t(&self) -> CudaMatrix<C, R> {
         todo!()
     }
 }
@@ -321,12 +410,6 @@ impl<const R: usize, const C: usize> Matrix<R, C> for CudaMatrix<R, C> {
 impl<const R: usize, const C: usize> From<HostMatrix<R, C>> for CudaMatrix<R, C> {
     fn from(value: HostMatrix<R, C>) -> Self {
         todo!()
-    }
-}
-
-impl<const R: usize, const C: usize> From<Vec<f32>> for CudaMatrix<R, C> {
-    fn from(value: Vec<f32>) -> Self {
-        Self::from(HostMatrix::from(value))
     }
 }
 
