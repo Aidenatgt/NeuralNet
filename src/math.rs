@@ -1,6 +1,7 @@
 use std::{
     fmt::Display,
     os::raw::{c_int, c_ulong, c_void},
+    ptr::null_mut,
 };
 
 #[allow(non_camel_case_types)]
@@ -18,14 +19,58 @@ unsafe extern "C" {
     ) -> cudaError_t;
 }
 
+pub unsafe fn cuda_malloc_bytes(bytes: usize) -> *mut c_void {
+    let mut p: *mut c_void = null_mut();
+    unsafe {
+        let err = cudaMalloc(&mut p as *mut _, bytes as c_ulong);
+        assert_eq!(err, 0, "cudaMalloc failed: code {}", err);
+    }
+    p
+}
+
+pub unsafe fn cuda_free(p: *mut c_void) {
+    unsafe {
+        if !p.is_null() {
+            let _ = cudaFree(p);
+        }
+    }
+}
+
 #[link(name = "cuda_lib", kind = "static")]
 unsafe extern "C" {
-    unsafe fn t(a_ptr: *mut c_void, d_ptr: *mut c_void, r: c_int, c: c_int);
-    unsafe fn mmul(a_ptr: *mut c_void, b_ptr: *mut c_void, r: c_int, c: c_int) -> *mut c_void;
-    unsafe fn emul(a_ptr: *mut c_void, b_ptr: *mut c_void, d_ptr: *mut c_void, n: c_int);
-    unsafe fn eadd(a_ptr: *mut c_void, b_ptr: *mut c_void, d_ptr: *mut c_void, n: c_int);
-    unsafe fn esub(a_ptr: *mut c_void, b_ptr: *mut c_void, d_ptr: *mut c_void, n: c_int);
-    unsafe fn unary_op(a_ptr: *mut c_void, d_ptr: *mut c_void, op: c_int, n: c_int);
+    unsafe fn t(a_ptr: *mut c_void, r: c_int, c: c_int) -> *mut c_void;
+    unsafe fn mmul(
+        a_ptr: *mut c_void,
+        b_ptr: *mut c_void,
+        r: c_int,
+        c: c_int,
+        n: c_int,
+    ) -> *mut c_void;
+    unsafe fn emul(
+        a_ptr: *mut c_void,
+        b_ptr: *mut c_void,
+        d_ptr: *mut c_void,
+        n: c_int,
+    ) -> *mut c_void;
+    unsafe fn add(
+        a_ptr: *const c_void,
+        b_ptr: *const c_void,
+        d_ptr: *mut c_void,
+        n: c_int,
+    ) -> *mut c_void;
+    unsafe fn sub(
+        a_ptr: *mut c_void,
+        b_ptr: *mut c_void,
+        d_ptr: *mut c_void,
+        n: c_int,
+    ) -> *mut c_void;
+    unsafe fn unary_op(a_ptr: *mut c_void, d_ptr: *mut c_void, op: c_int, n: c_int) -> *mut c_void;
+    unsafe fn unary_op_grad(
+        a_ptr: *mut c_void,
+        d_ptr: *mut c_void,
+        op: c_int,
+        n: c_int,
+    ) -> *mut c_void;
 }
 
 // cudaMemcpyKind enum
@@ -60,14 +105,16 @@ pub trait Matrix<const R: usize, const C: usize>: Sized + Display {
         &self,
         rhs: &<Self::Fam as MatFamily>::Mat<C, N>,
     ) -> <Self::Fam as MatFamily>::Mat<R, N>;
-    fn emul(&self, rhs: Self) -> Self;
-    fn emul_assign(&mut self, rhs: Self);
-    fn add(&self, rhs: Self) -> Self;
-    fn add_assign(&mut self, rhs: Self);
-    fn sub(&self, rhs: Self) -> Self;
-    fn sub_assign(&mut self, rhs: Self);
+    fn emul(&self, rhs: &Self) -> Self;
+    fn emul_assign(&mut self, rhs: &Self);
+    fn add(&self, rhs: &Self) -> Self;
+    fn add_assign(&mut self, rhs: &Self);
+    fn sub(&self, rhs: &Self) -> Self;
+    fn sub_assign(&mut self, rhs: &Self);
     fn unary_op(&self, op: UnaryOp) -> Self;
     fn unary_op_assign(&mut self, op: UnaryOp);
+    fn unary_op_grad(&self, op: UnaryOp) -> Self;
+    fn unary_op_grad_assign(&mut self, op: UnaryOp);
 }
 
 pub struct HostFam {}
@@ -140,34 +187,49 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
         result
     }
 
-    fn emul(&self, rhs: Self) -> Self {
-        let result_data: Vec<f32> = self.data.iter().zip(rhs.data).map(|(a, b)| a * b).collect();
+    fn emul(&self, rhs: &Self) -> Self {
+        let result_data: Vec<f32> = self
+            .data
+            .iter()
+            .zip(rhs.data.clone())
+            .map(|(a, b)| a * b)
+            .collect();
         Self::from(result_data)
     }
 
-    fn emul_assign(&mut self, rhs: Self) {
+    fn emul_assign(&mut self, rhs: &Self) {
         for i in 0..self.data.len() {
             self.data[i] = self.data[i] * rhs.data[i]
         }
     }
 
-    fn add(&self, rhs: Self) -> Self {
-        let result_data: Vec<f32> = self.data.iter().zip(rhs.data).map(|(a, b)| a + b).collect();
+    fn add(&self, rhs: &Self) -> Self {
+        let result_data: Vec<f32> = self
+            .data
+            .iter()
+            .zip(rhs.data.clone())
+            .map(|(a, b)| a + b)
+            .collect();
         Self::from(result_data)
     }
 
-    fn add_assign(&mut self, rhs: Self) {
+    fn add_assign(&mut self, rhs: &Self) {
         for i in 0..self.data.len() {
             self.data[i] = self.data[i] + rhs.data[i]
         }
     }
 
-    fn sub(&self, rhs: Self) -> Self {
-        let result_data: Vec<f32> = self.data.iter().zip(rhs.data).map(|(a, b)| a - b).collect();
+    fn sub(&self, rhs: &Self) -> Self {
+        let result_data: Vec<f32> = self
+            .data
+            .iter()
+            .zip(rhs.data.clone())
+            .map(|(a, b)| a - b)
+            .collect();
         Self::from(result_data)
     }
 
-    fn sub_assign(&mut self, rhs: Self) {
+    fn sub_assign(&mut self, rhs: &Self) {
         for i in 0..self.data.len() {
             self.data[i] = self.data[i] - rhs.data[i]
         }
@@ -176,7 +238,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
     fn unary_op(&self, op: UnaryOp) -> Self {
         let unary = match op {
             UnaryOp::Relu => |x: &f32| if *x < 0.0 { 0.0 } else { *x },
-            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.01 * *x } else { *x },
+            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.1 * *x } else { *x },
             UnaryOp::Silu => |x: &f32| {
                 // *x * sigmoid(*x)
                 let e = (-*x).exp();
@@ -214,7 +276,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
     fn unary_op_assign(&mut self, op: UnaryOp) {
         let unary = match op {
             UnaryOp::Relu => |x: &f32| if *x < 0.0 { 0.0 } else { *x },
-            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.01 * *x } else { *x },
+            UnaryOp::LeakyRelu => |x: &f32| if *x < 0.0 { 0.1 * *x } else { *x },
             UnaryOp::Silu => |x: &f32| {
                 // *x * sigmoid(*x)
                 let e = (-*x).exp();
@@ -249,6 +311,14 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
         self.data = self.data.iter().map(unary).collect::<Vec<f32>>()
     }
 
+    fn unary_op_grad(&self, op: UnaryOp) -> Self {
+        todo!()
+    }
+
+    fn unary_op_grad_assign(&mut self, op: UnaryOp) {
+        todo!()
+    }
+
     fn t(&self) -> HostMatrix<C, R> {
         let mut result: HostMatrix<C, R> = HostMatrix::zeros();
 
@@ -262,7 +332,25 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
     }
 }
 
-impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for anyhow::Result<HostMatrix<R, C>> {
+impl<const R: usize, const C: usize> From<&CudaMatrix<R, C>> for HostMatrix<R, C> {
+    fn from(value: &CudaMatrix<R, C>) -> Self {
+        let mut data = vec![0.0f32; R * C];
+        let bytes = R * C * std::mem::size_of::<f32>();
+        unsafe {
+            let err = cudaMemcpy(
+                data.as_mut_ptr() as *mut _,
+                value.ptr as *const _,
+                bytes as _,
+                CUDA_MEMCPY_DEVICE_TO_HOST,
+            );
+            if err != 0 {
+                panic!("cudaMemcpy D2H failed with error code {}", err);
+            }
+        }
+        HostMatrix::<R, C> { data }
+    }
+}
+impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for HostMatrix<R, C> {
     fn from(value: CudaMatrix<R, C>) -> Self {
         let mut data = vec![0.0f32; R * C];
         let bytes = R * C * std::mem::size_of::<f32>();
@@ -277,7 +365,7 @@ impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for anyhow::Result<H
                 panic!("cudaMemcpy D2H failed with error code {}", err);
             }
         }
-        Ok(HostMatrix::<R, C> { data })
+        HostMatrix::<R, C> { data }
     }
 }
 
@@ -338,7 +426,7 @@ impl<const R: usize, const C: usize> Display for HostMatrix<R, C> {
 pub struct CudaFam {}
 
 pub struct CudaMatrix<const R: usize, const C: usize> {
-    pub ptr: *mut f32, // device memory
+    pub ptr: *mut c_void, // device memory
 }
 
 impl MatFamily for CudaFam {
@@ -352,64 +440,133 @@ impl<const R: usize, const C: usize> Matrix<R, C> for CudaMatrix<R, C> {
         Ok(Self::from(HostMatrix::<R, C>::from_slice(slice)?))
     }
     fn zeros() -> Self {
-        todo!()
+        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
+        unsafe {
+            let zeros: &[f32] = &vec![0.0; Self::rows() * Self::cols()];
+            cudaMemcpy(
+                ptr,
+                zeros.as_ptr() as *const c_void,
+                (R * C * size_of::<f32>()) as u64,
+                CUDA_MEMCPY_HOST_TO_DEVICE,
+            );
+        }
+        Self { ptr }
     }
 
     fn rows() -> usize {
-        todo!()
+        R
     }
 
     fn cols() -> usize {
-        todo!()
+        C
     }
 
     fn mmul<const N: usize>(
         &self,
         rhs: &<Self::Fam as MatFamily>::Mat<C, N>,
     ) -> <Self::Fam as MatFamily>::Mat<R, N> {
+        let ptr = unsafe { mmul(self.ptr, rhs.ptr, R as i32, C as i32, N as i32) };
+        CudaMatrix::<R, N> { ptr }
+    }
+
+    fn emul(&self, rhs: &Self) -> Self {
+        let result = Self::zeros();
+        unsafe {
+            emul(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
+        };
+        result
+    }
+
+    fn emul_assign(&mut self, rhs: &Self) {
         todo!()
     }
 
-    fn emul(&self, rhs: Self) -> Self {
-        todo!()
+    fn add(&self, rhs: &Self) -> Self {
+        let result = Self::zeros();
+        unsafe {
+            add(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
+        };
+        result
     }
 
-    fn emul_assign(&mut self, rhs: Self) {
-        todo!()
+    fn add_assign(&mut self, rhs: &Self) {
+        unsafe {
+            add(self.ptr, rhs.ptr, self.ptr, (R * C) as i32);
+        }
     }
 
-    fn add(&self, rhs: Self) -> Self {
-        todo!()
+    fn sub(&self, rhs: &Self) -> Self {
+        let result = Self::zeros();
+        unsafe {
+            sub(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
+        };
+        result
     }
 
-    fn add_assign(&mut self, rhs: Self) {
-        todo!()
-    }
-
-    fn sub(&self, rhs: Self) -> Self {
-        todo!()
-    }
-
-    fn sub_assign(&mut self, rhs: Self) {
+    fn sub_assign(&mut self, rhs: &Self) {
         todo!()
     }
 
     fn unary_op(&self, op: UnaryOp) -> Self {
-        todo!()
+        let result = Self::zeros();
+
+        unsafe {
+            unary_op(self.ptr, result.ptr, op as i32, (R * C) as c_int);
+        }
+
+        result
     }
 
     fn unary_op_assign(&mut self, op: UnaryOp) {
         todo!()
     }
 
-    fn t(&self) -> CudaMatrix<C, R> {
+    fn unary_op_grad(&self, op: UnaryOp) -> Self {
+        let result = Self::zeros();
+
+        unsafe {
+            unary_op_grad(self.ptr, result.ptr, op as i32, (R * C) as c_int);
+        }
+
+        result
+    }
+
+    fn unary_op_grad_assign(&mut self, op: UnaryOp) {
         todo!()
+    }
+
+    fn t(&self) -> CudaMatrix<C, R> {
+        let ptr = unsafe { t(self.ptr, R as c_int, C as c_int) };
+        CudaMatrix::<C, R> { ptr }
     }
 }
 
 impl<const R: usize, const C: usize> From<HostMatrix<R, C>> for CudaMatrix<R, C> {
     fn from(value: HostMatrix<R, C>) -> Self {
-        todo!()
+        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
+        unsafe {
+            cudaMemcpy(
+                ptr,
+                (&value.data).as_ptr() as *const c_void,
+                (R * C * size_of::<f32>()) as u64,
+                CUDA_MEMCPY_HOST_TO_DEVICE,
+            );
+        }
+        Self { ptr }
+    }
+}
+impl<const R: usize, const C: usize> From<&HostMatrix<R, C>> for CudaMatrix<R, C> {
+    fn from(value: &HostMatrix<R, C>) -> Self {
+        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
+        unsafe {
+            cudaMemcpy(
+                ptr,
+                (&value.data).as_ptr() as *const c_void,
+                (R * C * size_of::<f32>()) as u64,
+                CUDA_MEMCPY_HOST_TO_DEVICE,
+            );
+        }
+        Self { ptr }
     }
 }
 
@@ -417,7 +574,7 @@ impl<const R: usize, const C: usize> Drop for CudaMatrix<R, C> {
     fn drop(&mut self) {
         unsafe {
             if !self.ptr.is_null() {
-                let _ = cudaFree(self.ptr as *mut _);
+                let _ = cudaFree(self.ptr);
                 self.ptr = std::ptr::null_mut();
             }
         }
@@ -426,6 +583,7 @@ impl<const R: usize, const C: usize> Drop for CudaMatrix<R, C> {
 
 impl<const R: usize, const C: usize> Display for CudaMatrix<R, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        let on_device: HostMatrix<R, C> = HostMatrix::from(self);
+        on_device.fmt(f)
     }
 }

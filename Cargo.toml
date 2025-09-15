@@ -8,4 +8,5 @@ cmake = "0.1.54"
 
 [dependencies]
 anyhow = "1.0.99"
+env = "1.0.1"
 rayon = "1.11.0"
