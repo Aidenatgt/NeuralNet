@@ -76,6 +76,7 @@ unsafe extern "C" {
 // cudaMemcpyKind enum
 pub const CUDA_MEMCPY_HOST_TO_DEVICE: c_int = 1;
 pub const CUDA_MEMCPY_DEVICE_TO_HOST: c_int = 2;
+pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: c_int = 3;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug)]
@@ -93,7 +94,7 @@ pub trait MatFamily {
     type Mat<const R: usize, const C: usize>: Matrix<R, C, Fam = Self>;
 }
 
-pub trait Matrix<const R: usize, const C: usize>: Sized + Display {
+pub trait Matrix<const R: usize, const C: usize>: Sized + Display + Clone {
     type Fam: MatFamily;
 
     fn from_slice(slice: &[f32]) -> anyhow::Result<Self>;
@@ -119,6 +120,7 @@ pub trait Matrix<const R: usize, const C: usize>: Sized + Display {
 
 pub struct HostFam {}
 
+#[derive(Clone)]
 pub struct HostMatrix<const R: usize, const C: usize> {
     data: Vec<f32>,
 }
@@ -585,5 +587,20 @@ impl<const R: usize, const C: usize> Display for CudaMatrix<R, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let on_device: HostMatrix<R, C> = HostMatrix::from(self);
         on_device.fmt(f)
+    }
+}
+
+impl<const R: usize, const C: usize> Clone for CudaMatrix<R, C> {
+    fn clone(&self) -> Self {
+        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
+        unsafe {
+            cudaMemcpy(
+                ptr,
+                self.ptr,
+                (R * C * size_of::<f32>()) as u64,
+                CUDA_MEMCPY_DEVICE_TO_DEVICE,
+            );
+        }
+        Self { ptr }
     }
 }
