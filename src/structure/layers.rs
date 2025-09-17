@@ -5,9 +5,8 @@ use crate::{
 
 pub struct Record<F: MatFamily, const I: usize, const O: usize> {
     input: F::Mat<I, 1>,
-    output: F::Mat<O, 1>,
-    activation: F::Mat<O, 1>,
-    gradient: F::Mat<O, 1>,
+    pre_act: F::Mat<O, 1>,
+    post_act: F::Mat<O, 1>,
 }
 
 mod sealed {
@@ -17,6 +16,11 @@ mod sealed {
 pub trait Layer<F: MatFamily, const I: usize, const O: usize>: Sealed {
     fn calc(&self, input: &F::Mat<I, 1>) -> F::Mat<O, 1>;
     fn record_calc(&self, input: &F::Mat<I, 1>) -> Record<F, I, O>;
+    fn backward(
+        &self,
+        rec: &Record<F, I, O>,
+        upstream: &F::Mat<O, 1>,
+    ) -> (F::Mat<I, 1>, F::Mat<O, I>, F::Mat<O, 1>);
 }
 
 pub struct DenseLayer<F: MatFamily, const I: usize, const O: usize> {
@@ -40,20 +44,31 @@ impl<F: MatFamily, const I: usize, const O: usize> Sealed for DenseLayer<F, I, O
 impl<F: MatFamily, const I: usize, const O: usize> Layer<F, I, O> for DenseLayer<F, I, O> {
     fn calc(&self, input: &F::Mat<I, 1>) -> F::Mat<O, 1> {
         let weighted = self.weights.mmul(input);
-        let activated = weighted.unary_op(self.activation);
-        self.biases.add(&activated)
+        let biased = weighted.add(&self.biases);
+        biased.unary_op(self.activation)
     }
 
     fn record_calc(&self, input: &F::Mat<I, 1>) -> Record<F, I, O> {
-        let weighted = self.weights.mmul(input);
-        let activated = weighted.unary_op(self.activation);
-        let output = self.biases.add(&activated);
+        let mut pre_act = self.weights.mmul(input);
+        pre_act.add_assign(&self.biases);
+        let post_act = pre_act.unary_op(self.activation);
 
         Record::<F, I, O> {
             input: input.clone(),
-            output,
-            activation: activated.clone(),
-            gradient: activated.unary_op_grad(self.activation),
+            pre_act,
+            post_act,
         }
+    }
+
+    fn backward(
+        &self,
+        rec: &Record<F, I, O>,
+        upstream: &<F as MatFamily>::Mat<O, 1>,
+    ) -> (
+        <F as MatFamily>::Mat<I, 1>,
+        <F as MatFamily>::Mat<O, I>,
+        <F as MatFamily>::Mat<O, 1>,
+    ) {
+        todo!()
     }
 }

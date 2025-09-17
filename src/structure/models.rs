@@ -27,3 +27,11 @@ where
         self.1.forward(&mid)
     }
 }
+
+#[macro_export]
+macro_rules! chain {
+    ($single:expr $(,)?) => { $single };
+    ($head:expr, $($tail:expr),+ $(,)?) => {
+        $crate::structure::models::Link($head, $crate::chain!($($tail),+))
+    };
+}

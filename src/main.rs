@@ -1,11 +1,9 @@
 use std::time::{Duration, SystemTime};
 
+use crate::math::CudaMatrix;
 use crate::{
-    math::{CudaFam, CudaMatrix, HostMatrix, Matrix},
-    structure::{
-        layers::{DenseLayer, Layer},
-        models::{Link, Node},
-    },
+    math::{CudaFam, Matrix},
+    structure::{layers::DenseLayer, models::Node},
 };
 
 mod math;
@@ -17,25 +15,23 @@ fn benchmark<S: AsRef<str>, R, F: Fn() -> R>(name: S, func: F) -> anyhow::Result
     let result = func();
     duration = start.elapsed()?;
 
-    println!("Benchmark {}: {}ns", name.as_ref(), duration.as_nanos());
+    println!(
+        "Benchmark {}: {}ms",
+        name.as_ref(),
+        duration.as_nanos() as f32 / 1000.0
+    );
 
     Ok(result)
 }
 
 fn main() -> anyhow::Result<()> {
-    let w1: CudaMatrix<3, 2> = CudaMatrix::from_slice(&[1., 2., 3., 4., 5., 6.])?;
-    let b1: CudaMatrix<3, 1> = CudaMatrix::from_slice(&[3., 2., 1.])?;
+    let w1: CudaMatrix<3, 2> = CudaMatrix::from_slice(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6])?;
+    let b1: CudaMatrix<3, 1> = CudaMatrix::from_slice(&[0.2, 0.3, 0.4])?;
 
-    let w2: CudaMatrix<1, 3> = CudaMatrix::from_slice(&[1., 2., 3.])?;
-    let b2: CudaMatrix<1, 1> = CudaMatrix::from_slice(&[1.])?;
+    let layer1: DenseLayer<CudaFam, 2, 3> = DenseLayer::new(w1, b1, math::UnaryOp::Tanh);
 
-    let layer1: DenseLayer<CudaFam, 2, 3> = DenseLayer::new(w1, b1, math::UnaryOp::Relu);
-    let layer2: DenseLayer<CudaFam, 3, 1> = DenseLayer::new(w2, b2, math::UnaryOp::Relu);
-
-    let model: Link<DenseLayer<CudaFam, 2, 3>, DenseLayer<CudaFam, 3, 1>, 3> = Link(layer1, layer2);
-
-    let input: CudaMatrix<2, 1> = CudaMatrix::from_slice(&[1., 2.])?;
-    let output = benchmark("GPU Runtime", || model.forward(&input))?;
+    let input: CudaMatrix<2, 1> = CudaMatrix::from_slice(&[0.9, 1.1])?;
+    let output = benchmark("GPU Runtime", || layer1.forward(&input))?;
 
     println!("{}", output);
 

@@ -1,86 +1,13 @@
-use std::{
-    fmt::Display,
-    os::raw::{c_int, c_ulong, c_void},
-    ptr::null_mut,
-};
+mod gpu;
 
-#[allow(non_camel_case_types)]
-type cudaError_t = c_int;
+use std::fmt::Display;
 
-#[link(name = "cudart")]
-unsafe extern "C" {
-    unsafe fn cudaMalloc(ptr: *mut *mut c_void, size: c_ulong) -> cudaError_t;
-    unsafe fn cudaFree(ptr: *mut c_void) -> cudaError_t;
-    unsafe fn cudaMemcpy(
-        dst: *mut c_void,
-        src: *const c_void,
-        size: c_ulong,
-        kind: c_int,
-    ) -> cudaError_t;
-}
-
-pub unsafe fn cuda_malloc_bytes(bytes: usize) -> *mut c_void {
-    let mut p: *mut c_void = null_mut();
-    unsafe {
-        let err = cudaMalloc(&mut p as *mut _, bytes as c_ulong);
-        assert_eq!(err, 0, "cudaMalloc failed: code {}", err);
-    }
-    p
-}
-
-pub unsafe fn cuda_free(p: *mut c_void) {
-    unsafe {
-        if !p.is_null() {
-            let _ = cudaFree(p);
-        }
-    }
-}
-
-#[link(name = "cuda_lib", kind = "static")]
-unsafe extern "C" {
-    unsafe fn t(a_ptr: *mut c_void, r: c_int, c: c_int) -> *mut c_void;
-    unsafe fn mmul(
-        a_ptr: *mut c_void,
-        b_ptr: *mut c_void,
-        r: c_int,
-        c: c_int,
-        n: c_int,
-    ) -> *mut c_void;
-    unsafe fn emul(
-        a_ptr: *mut c_void,
-        b_ptr: *mut c_void,
-        d_ptr: *mut c_void,
-        n: c_int,
-    ) -> *mut c_void;
-    unsafe fn add(
-        a_ptr: *const c_void,
-        b_ptr: *const c_void,
-        d_ptr: *mut c_void,
-        n: c_int,
-    ) -> *mut c_void;
-    unsafe fn sub(
-        a_ptr: *mut c_void,
-        b_ptr: *mut c_void,
-        d_ptr: *mut c_void,
-        n: c_int,
-    ) -> *mut c_void;
-    unsafe fn unary_op(a_ptr: *mut c_void, d_ptr: *mut c_void, op: c_int, n: c_int) -> *mut c_void;
-    unsafe fn unary_op_grad(
-        a_ptr: *mut c_void,
-        d_ptr: *mut c_void,
-        op: c_int,
-        n: c_int,
-    ) -> *mut c_void;
-}
-
-// cudaMemcpyKind enum
-pub const CUDA_MEMCPY_HOST_TO_DEVICE: c_int = 1;
-pub const CUDA_MEMCPY_DEVICE_TO_HOST: c_int = 2;
-pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: c_int = 3;
+use crate::math::gpu::GPU_THREAD;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug)]
 pub enum UnaryOp {
+    Ident = -1,
     Relu = 0,
     LeakyRelu = 1,
     Silu = 2,
@@ -99,8 +26,12 @@ pub trait Matrix<const R: usize, const C: usize>: Sized + Display + Clone {
 
     fn from_slice(slice: &[f32]) -> anyhow::Result<Self>;
     fn zeros() -> Self;
-    fn rows() -> usize;
-    fn cols() -> usize;
+    fn rows() -> usize {
+        R
+    }
+    fn cols() -> usize {
+        C
+    }
     fn t(&self) -> <Self::Fam as MatFamily>::Mat<C, R>;
     fn mmul<const N: usize>(
         &self,
@@ -158,14 +89,6 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
         Self {
             data: vec![0.0_f32; R * C],
         }
-    }
-
-    fn rows() -> usize {
-        R
-    }
-
-    fn cols() -> usize {
-        C
     }
 
     fn mmul<const N: usize>(
@@ -270,6 +193,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
                     (1.0 + (*x).exp()).ln()
                 }
             },
+            UnaryOp::Ident => |x: &f32| *x,
         };
 
         Self::from_slice(&self.data.iter().map(unary).collect::<Vec<f32>>()).unwrap()
@@ -308,6 +232,7 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
                     (1.0 + (*x).exp()).ln()
                 }
             },
+            UnaryOp::Ident => |_: &f32| 1.0,
         };
 
         self.data = self.data.iter().map(unary).collect::<Vec<f32>>()
@@ -336,37 +261,13 @@ impl<const R: usize, const C: usize> Matrix<R, C> for HostMatrix<R, C> {
 
 impl<const R: usize, const C: usize> From<&CudaMatrix<R, C>> for HostMatrix<R, C> {
     fn from(value: &CudaMatrix<R, C>) -> Self {
-        let mut data = vec![0.0f32; R * C];
-        let bytes = R * C * std::mem::size_of::<f32>();
-        unsafe {
-            let err = cudaMemcpy(
-                data.as_mut_ptr() as *mut _,
-                value.ptr as *const _,
-                bytes as _,
-                CUDA_MEMCPY_DEVICE_TO_HOST,
-            );
-            if err != 0 {
-                panic!("cudaMemcpy D2H failed with error code {}", err);
-            }
-        }
+        let data = GPU_THREAD.d2h(value.ptr, R * C);
         HostMatrix::<R, C> { data }
     }
 }
 impl<const R: usize, const C: usize> From<CudaMatrix<R, C>> for HostMatrix<R, C> {
     fn from(value: CudaMatrix<R, C>) -> Self {
-        let mut data = vec![0.0f32; R * C];
-        let bytes = R * C * std::mem::size_of::<f32>();
-        unsafe {
-            let err = cudaMemcpy(
-                data.as_mut_ptr() as *mut _,
-                value.ptr as *const _,
-                bytes as _,
-                CUDA_MEMCPY_DEVICE_TO_HOST,
-            );
-            if err != 0 {
-                panic!("cudaMemcpy D2H failed with error code {}", err);
-            }
-        }
+        let data = GPU_THREAD.d2h(value.ptr, R * C);
         HostMatrix::<R, C> { data }
     }
 }
@@ -428,7 +329,7 @@ impl<const R: usize, const C: usize> Display for HostMatrix<R, C> {
 pub struct CudaFam {}
 
 pub struct CudaMatrix<const R: usize, const C: usize> {
-    pub ptr: *mut c_void, // device memory
+    pub ptr: *mut f32, // device memory
 }
 
 impl MatFamily for CudaFam {
@@ -442,144 +343,105 @@ impl<const R: usize, const C: usize> Matrix<R, C> for CudaMatrix<R, C> {
         Ok(Self::from(HostMatrix::<R, C>::from_slice(slice)?))
     }
     fn zeros() -> Self {
-        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
-        unsafe {
-            let zeros: &[f32] = &vec![0.0; Self::rows() * Self::cols()];
-            cudaMemcpy(
-                ptr,
-                zeros.as_ptr() as *const c_void,
-                (R * C * size_of::<f32>()) as u64,
-                CUDA_MEMCPY_HOST_TO_DEVICE,
-            );
-        }
+        let ptr: *mut f32 = GPU_THREAD.malloc(R * C);
+        GPU_THREAD.h2d(ptr, vec![0.0; Self::rows() * Self::cols()]);
         Self { ptr }
-    }
-
-    fn rows() -> usize {
-        R
-    }
-
-    fn cols() -> usize {
-        C
     }
 
     fn mmul<const N: usize>(
         &self,
         rhs: &<Self::Fam as MatFamily>::Mat<C, N>,
     ) -> <Self::Fam as MatFamily>::Mat<R, N> {
-        let ptr = unsafe { mmul(self.ptr, rhs.ptr, R as i32, C as i32, N as i32) };
+        let ptr = GPU_THREAD.mmul(self.ptr, rhs.ptr, R as i32, C as i32, N as i32);
         CudaMatrix::<R, N> { ptr }
     }
 
     fn emul(&self, rhs: &Self) -> Self {
         let result = Self::zeros();
-        unsafe {
-            emul(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
-        };
+        let _ = GPU_THREAD.emul(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
         result
     }
 
     fn emul_assign(&mut self, rhs: &Self) {
-        todo!()
+        let _ = GPU_THREAD.emul(self.ptr, rhs.ptr, self.ptr, (R * C) as i32);
     }
 
     fn add(&self, rhs: &Self) -> Self {
         let result = Self::zeros();
-        unsafe {
-            add(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
-        };
+        let _ = GPU_THREAD.add(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
         result
     }
 
     fn add_assign(&mut self, rhs: &Self) {
-        unsafe {
-            add(self.ptr, rhs.ptr, self.ptr, (R * C) as i32);
-        }
+        let _ = GPU_THREAD.add(self.ptr, rhs.ptr, self.ptr, (R * C) as i32);
     }
 
     fn sub(&self, rhs: &Self) -> Self {
         let result = Self::zeros();
-        unsafe {
-            sub(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
-        };
+        let _ = GPU_THREAD.sub(self.ptr, rhs.ptr, result.ptr, (R * C) as i32);
         result
     }
 
     fn sub_assign(&mut self, rhs: &Self) {
-        todo!()
+        let _ = GPU_THREAD.sub(self.ptr, rhs.ptr, self.ptr, (R * C) as i32);
     }
 
     fn unary_op(&self, op: UnaryOp) -> Self {
-        let result = Self::zeros();
-
-        unsafe {
-            unary_op(self.ptr, result.ptr, op as i32, (R * C) as c_int);
+        if op as i32 != UnaryOp::Ident as i32 {
+            let result = Self::zeros();
+            let _ = GPU_THREAD.unary_op(self.ptr, result.ptr, (R * C) as i32, op);
+            result
+        } else {
+            self.clone()
         }
-
-        result
     }
 
     fn unary_op_assign(&mut self, op: UnaryOp) {
-        todo!()
+        if op as i32 != UnaryOp::Ident as i32 {
+            let _ = GPU_THREAD.unary_op(self.ptr, self.ptr, (R * C) as i32, op);
+        };
     }
 
     fn unary_op_grad(&self, op: UnaryOp) -> Self {
-        let result = Self::zeros();
-
-        unsafe {
-            unary_op_grad(self.ptr, result.ptr, op as i32, (R * C) as c_int);
+        if op as i32 != UnaryOp::Ident as i32 {
+            let result = Self::zeros();
+            let _ = GPU_THREAD.unary_op_grad(self.ptr, result.ptr, (R * C) as i32, op);
+            result
+        } else {
+            CudaMatrix::from_slice(&vec![1.0; Self::rows() * Self::cols()])
+                .expect("failed to initialize a CUDA matrix of 1s")
         }
-
-        result
     }
 
     fn unary_op_grad_assign(&mut self, op: UnaryOp) {
-        todo!()
+        let _ = GPU_THREAD.unary_op_grad(self.ptr, self.ptr, (R * C) as i32, op);
     }
 
     fn t(&self) -> CudaMatrix<C, R> {
-        let ptr = unsafe { t(self.ptr, R as c_int, C as c_int) };
+        let ptr = GPU_THREAD.t(self.ptr, R as i32, C as i32);
         CudaMatrix::<C, R> { ptr }
     }
 }
 
 impl<const R: usize, const C: usize> From<HostMatrix<R, C>> for CudaMatrix<R, C> {
     fn from(value: HostMatrix<R, C>) -> Self {
-        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
-        unsafe {
-            cudaMemcpy(
-                ptr,
-                (&value.data).as_ptr() as *const c_void,
-                (R * C * size_of::<f32>()) as u64,
-                CUDA_MEMCPY_HOST_TO_DEVICE,
-            );
-        }
+        let ptr: *mut f32 = GPU_THREAD.malloc(R * C);
+        GPU_THREAD.h2d(ptr, value.data);
         Self { ptr }
     }
 }
 impl<const R: usize, const C: usize> From<&HostMatrix<R, C>> for CudaMatrix<R, C> {
     fn from(value: &HostMatrix<R, C>) -> Self {
-        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
-        unsafe {
-            cudaMemcpy(
-                ptr,
-                (&value.data).as_ptr() as *const c_void,
-                (R * C * size_of::<f32>()) as u64,
-                CUDA_MEMCPY_HOST_TO_DEVICE,
-            );
-        }
+        let ptr: *mut f32 = GPU_THREAD.malloc(R * C);
+        GPU_THREAD.h2d(ptr, value.data.clone());
         Self { ptr }
     }
 }
 
 impl<const R: usize, const C: usize> Drop for CudaMatrix<R, C> {
     fn drop(&mut self) {
-        unsafe {
-            if !self.ptr.is_null() {
-                let _ = cudaFree(self.ptr);
-                self.ptr = std::ptr::null_mut();
-            }
-        }
+        GPU_THREAD.free(self.ptr);
+        self.ptr = std::ptr::null_mut();
     }
 }
 
@@ -592,15 +454,8 @@ impl<const R: usize, const C: usize> Display for CudaMatrix<R, C> {
 
 impl<const R: usize, const C: usize> Clone for CudaMatrix<R, C> {
     fn clone(&self) -> Self {
-        let ptr: *mut c_void = unsafe { cuda_malloc_bytes(R * C * size_of::<f32>()) };
-        unsafe {
-            cudaMemcpy(
-                ptr,
-                self.ptr,
-                (R * C * size_of::<f32>()) as u64,
-                CUDA_MEMCPY_DEVICE_TO_DEVICE,
-            );
-        }
+        let ptr = GPU_THREAD.malloc(R * C);
+        GPU_THREAD.d2d(self.ptr, ptr, R * C);
         Self { ptr }
     }
 }

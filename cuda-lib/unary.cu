@@ -1,4 +1,5 @@
 #include "include/cuda_lib.h"
+#include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
 
@@ -127,22 +128,68 @@ __global__ void unary_op_grad_kernel(void *in, void *out, int n, int op) {
   }
 }
 
-extern "C" void *unary_op(void *a_ptr, void *d_ptr, int op, int n) {
-  dim3 block(16, 16);
-  dim3 grid((unsigned)n);
+extern "C" void *unary_op_f32(float *a_ptr, float *d_ptr, int op, int n) {
+  // Initialize runtime on primary context (helps when mixing with Driver API)
+  (void)cudaFree(0);
 
-  unary_op_kernel<<<grid, block>>>(a_ptr, d_ptr, n, op);
-  cudaDeviceSynchronize();
+  auto chk = [](const char *tag) {
+    cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess)
+      fprintf(stderr, "[CUDA] %s: %s\n", tag, cudaGetErrorString(e));
+    return e;
+  };
+
+  int threads = 256;
+  int blocks = (n + threads - 1) / threads;
+
+  // Clear any sticky error first
+  (void)cudaGetLastError();
+
+  unary_op_kernel<<<blocks, threads>>>(a_ptr, d_ptr, n, op);
+
+  // Catch immediate launch errors
+  if (chk("launch(gemm_tiled)") != cudaSuccess)
+    return d_ptr;
+
+  // Catch async errors
+  auto e = cudaDeviceSynchronize();
+  if (e != cudaSuccess) {
+    fprintf(stderr, "sync(gemm_tiled): %s\n", cudaGetErrorString(e));
+    (void)cudaGetLastError(); // clear sticky
+  }
 
   return d_ptr;
 }
 
-extern "C" void *unary_op_grad(void *a_ptr, void *d_ptr, int op, int n) {
-  dim3 block(16, 16);
-  dim3 grid((unsigned)n);
+extern "C" void *unary_op_grad_f32(float *a_ptr, float *d_ptr, int op, int n) {
+  // Initialize runtime on primary context (helps when mixing with Driver API)
+  (void)cudaFree(0);
 
-  unary_op_grad_kernel<<<grid, block>>>(a_ptr, d_ptr, n, op);
-  cudaDeviceSynchronize();
+  auto chk = [](const char *tag) {
+    cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess)
+      fprintf(stderr, "[CUDA] %s: %s\n", tag, cudaGetErrorString(e));
+    return e;
+  };
+
+  int threads = 256;
+  int blocks = (n + threads - 1) / threads;
+
+  // Clear any sticky error first
+  (void)cudaGetLastError();
+
+  unary_op_kernel<<<blocks, threads>>>(a_ptr, d_ptr, n, op);
+
+  // Catch immediate launch errors
+  if (chk("launch(gemm_tiled)") != cudaSuccess)
+    return d_ptr;
+
+  // Catch async errors
+  auto e = cudaDeviceSynchronize();
+  if (e != cudaSuccess) {
+    fprintf(stderr, "sync(gemm_tiled): %s\n", cudaGetErrorString(e));
+    (void)cudaGetLastError(); // clear sticky
+  }
 
   return d_ptr;
 }

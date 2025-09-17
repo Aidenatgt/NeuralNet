@@ -27,11 +27,9 @@ fn main() {
     cfg.define("CMAKE_CUDA_ARCHITECTURES", &sm)
         .define("CMAKE_BUILD_TYPE", "Debug") // or "Release"
         // <- this line is the switch: use clang++ as the CUDA compiler
-        .define("CMAKE_CUDA_COMPILER", "/usr/bin/clang++")
         .define("CMAKE_VERBOSE_MAKEFILE", "ON")
         .build_target("cuda_lib"); // must match add_library(cuda_lib ...)
 
-    cfg.define("CMAKE_CXX_COMPILER", "/usr/bin/clang++");
     if let Some(h) = host_cxx {
         // nvcc will use this as the host compiler
         cfg.define("CMAKE_CUDA_HOST_COMPILER", h);
@@ -48,15 +46,12 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/build", dst.display());
 
     // Link the static library built by CMake (target name = cuda_lib)
-    println!("cargo:rustc-link-lib=static=cuda_lib");
+    println!("cargo:rustc-link-lib=dylib=cuda_lib");
 
     // CUDA runtime (required for cudaMalloc/cudaMemcpy/kernel launches)
-    println!("cargo:rustc-link-lib=cudart");
-
-    // Only if you actually use C++ stdlib in your .cu (thrust, <vector>, etc.)
-    if link_stdcxx {
-        println!("cargo:rustc-link-lib=stdc++");
-    }
+    println!("cargo:rustc-link-lib=dylib=cudart");
+    println!("cargo:rustc-link-lib=dylib=cuda");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 
     // Rebuild when these change
     println!("cargo:rerun-if-changed=cuda-lib/CMakeLists.txt");
